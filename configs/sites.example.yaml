@@ -1,0 +1,12 @@
+sites:
+  - id: example
+    name: Example
+    url: https://example.com
+  - id: quotes
+    name: Quotes (static)
+    url: https://quotes.toscrape.com/
+    css_selector: ".quote"
+  - id: quotes_js
+    name: Quotes (JavaScript)
+    url: https://quotes.toscrape.com/js/
+    wait_for: ".quote"
