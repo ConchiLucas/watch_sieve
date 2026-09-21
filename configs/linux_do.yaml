@@ -1,0 +1,8 @@
+sites:
+  - id: linux_do
+    name: LINUX DO
+    url: https://linux.do/
+    category: forum
+    css_selector: a.title.raw-topic-link
+    wait_for: a.title.raw-topic-link
+    timeout_seconds: 60

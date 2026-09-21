@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 
+from watch_sieve.cancellation import check_cancelled
 from watch_sieve.browser_fetch import BrowserFetchError, BrowserSession
 from watch_sieve.extract import extract_title, list_topics, to_markdown, to_text
 from watch_sieve.http_fetch import HttpFetchError, fetch_http
@@ -10,7 +13,8 @@ from watch_sieve.quality import content_too_thin, needs_browser
 
 
 class WatchCrawler:
-    def __init__(self) -> None:
+    def __init__(self, *, should_stop: Callable[[], bool] | None = None) -> None:
+        self._should_stop = should_stop
         self._http = httpx.Client(follow_redirects=True)
         self._browser = BrowserSession()
 
@@ -46,6 +50,7 @@ class WatchCrawler:
         force_browser: bool = False,
         timeout_seconds: int = 30,
     ) -> FetchResult:
+        check_cancelled(self._should_stop)
         attempts = []
         html = ""
         status_code: int | None = None
@@ -54,7 +59,7 @@ class WatchCrawler:
 
         if not force_browser:
             try:
-                http_result = fetch_http(url, client=self._http, timeout_seconds=timeout_seconds)
+                http_result = fetch_http(url, client=self._http, timeout_seconds=timeout_seconds, should_stop=self._should_stop)
                 attempts.extend(http_result.attempts)
                 html = http_result.html
                 status_code = http_result.status_code
@@ -81,11 +86,13 @@ class WatchCrawler:
 
         last_error = ""
         for _ in range(2):
+            check_cancelled(self._should_stop)
             try:
                 browser_result = self._browser.fetch(
                     url,
                     wait_for=wait_for,
                     timeout_seconds=max(timeout_seconds, 45),
+                    should_stop=self._should_stop,
                 )
                 attempts.append(browser_result.attempt)
                 html = browser_result.html

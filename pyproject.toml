@@ -20,6 +20,7 @@ dependencies = [
     "playwright>=1.49",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "psycopg[binary,pool]>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -37,3 +38,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "postgres: uses the local watch_sieve PostgreSQL database",
+]

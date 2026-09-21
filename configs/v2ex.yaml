@@ -1,0 +1,6 @@
+sites:
+  - id: v2ex
+    name: V2EX
+    url: https://v2ex.com/
+    category: forum
+    css_selector: span.item_title a

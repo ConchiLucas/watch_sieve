@@ -1,4 +1,20 @@
-import type { FilterMeta, QueryState, TopicPage } from "./types";
+import {
+  currentNavId,
+  currentTopicId,
+  NAV_ITEMS,
+} from "./nav";
+import { emptyClassCatalog, emptyClassPage, knownTopicIds, topicsBody } from "./topics";
+import { emptyWatchPage, watchBody } from "./watch";
+import type {
+  ClassificationCatalog,
+  ClassificationPage,
+  ClassQueryState,
+  FilterMeta,
+  QueryState,
+  TopicPage,
+  WatchPage,
+  WatchQueryState,
+} from "./types";
 import "./styles.css";
 
 function requireApp(): HTMLDivElement {
@@ -10,21 +26,81 @@ function requireApp(): HTMLDivElement {
 }
 
 const root = requireApp();
-const pageSize = 20;
+const pageSize = 50;
 
 let meta: FilterMeta = { sites: [], categories: [] };
 let query: QueryState = readQuery();
 let pageData: TopicPage = emptyPage();
-let refreshing = false;
+let classQuery: ClassQueryState = readClassQuery();
+let classCatalog: ClassificationCatalog = emptyClassCatalog();
+let classPage: ClassificationPage = emptyClassPage();
+let classLoading = false;
+let classError = "";
+let watchQuery: WatchQueryState = readWatchQuery();
+let watchPage: WatchPage = emptyWatchPage();
+let watchKeywords = "";
+let watchLoading = false;
+let watchRunning = false;
+let watchError = "";
+let watchNotice = "";
+let requestError = "";
+
+function currentPage() {
+  return currentNavId(window.location.pathname);
+}
 
 boot();
+window.addEventListener("popstate", onLocationChange);
+window.addEventListener("hashchange", onLocationChange);
+
+function onLocationChange() {
+  render();
+  if (currentPage() === "topics") {
+    classQuery = readClassQuery();
+    void loadClassifications();
+  }
+  if (currentPage() === "watch") {
+    watchQuery = readWatchQuery();
+    void loadWatches();
+  }
+}
 
 async function boot() {
-  meta = await fetchJson<FilterMeta>("/api/filters");
-  pageData = await loadTopics(query);
   render();
-  if (!pageData.fetched_at) {
-    await refresh();
+  try {
+    meta = await fetchJson<FilterMeta>("/api/filters");
+    pageData = await loadTopics(query);
+    render();
+    if (!pageData.fetched_at && currentPage() === "titles") {
+      void refresh();
+    }
+    if (currentPage() === "topics") {
+      await loadClassifications();
+    }
+    if (currentPage() === "watch") {
+      await loadWatches();
+    }
+  } catch {
+    requestError = "加载失败，请稍后重试";
+    updateResults();
+  }
+  window.setTimeout(poll, 2000);
+}
+
+async function poll() {
+  try {
+    const snapshot = JSON.stringify(query);
+    const next = await loadTopics(query);
+    if (snapshot === JSON.stringify(query)) {
+      pageData = next;
+      requestError = "";
+      updateResults();
+    }
+  } catch {
+    requestError = "连接失败，暂时无法更新标题";
+    updateResults();
+  } finally {
+    window.setTimeout(poll, 2000);
   }
 }
 
@@ -39,36 +115,191 @@ async function loadTopics(next: QueryState): Promise<TopicPage> {
   return fetchJson<TopicPage>(`/api/topics?${params.toString()}`);
 }
 
-async function refresh() {
-  if (refreshing) {
-    return;
-  }
-  refreshing = true;
+function activeTopicId() {
+  return currentTopicId(window.location.hash, knownTopicIds(classCatalog));
+}
+
+async function loadClassifications() {
+  classLoading = true;
+  classError = "";
   render();
   try {
-    await fetch("/api/refresh", { method: "POST" });
-    pageData = await loadTopics(query);
+    const catalogParams = new URLSearchParams();
+    if (classQuery.q) catalogParams.set("q", classQuery.q);
+    if (classQuery.site_id) catalogParams.set("site_id", classQuery.site_id);
+    classCatalog = await fetchJson<ClassificationCatalog>(
+      `/api/classifications/catalog${catalogParams.toString() ? `?${catalogParams.toString()}` : ""}`,
+    );
+    const topic = currentTopicId(window.location.hash, knownTopicIds(classCatalog));
+    const params = new URLSearchParams();
+    if (topic) params.set("topic", topic);
+    if (classQuery.q) params.set("q", classQuery.q);
+    if (classQuery.site_id) params.set("site_id", classQuery.site_id);
+    params.set("page", String(classQuery.page));
+    params.set("page_size", String(pageSize));
+    classPage = await fetchJson<ClassificationPage>(`/api/classifications?${params.toString()}`);
+    classError = "";
   } catch {
-    pageData = { ...pageData, refreshing: false };
+    classError = "无法加载分类，请稍后重试";
   } finally {
-    refreshing = false;
+    classLoading = false;
     render();
+  }
+}
+
+async function loadWatches() {
+  watchLoading = true;
+  watchError = "";
+  render();
+  try {
+    const params = new URLSearchParams();
+    if (watchQuery.q) params.set("q", watchQuery.q);
+    if (watchQuery.site_id) params.set("site_id", watchQuery.site_id);
+    params.set("page", String(watchQuery.page));
+    params.set("page_size", String(pageSize));
+    watchPage = await fetchJson<WatchPage>(`/api/watches?${params.toString()}`);
+    watchKeywords = watchPage.keywords;
+    watchError = "";
+  } catch {
+    watchError = "无法加载关注，请稍后重试";
+  } finally {
+    watchLoading = false;
+    render();
+  }
+}
+
+async function saveWatchKeywords() {
+  watchError = "";
+  watchNotice = "";
+  render();
+  try {
+    const response = await fetch("/api/watches/interests", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keywords: watchKeywords }),
+    });
+    if (!response.ok) {
+      throw new Error("save failed");
+    }
+    const payload = await response.json();
+    watchKeywords = String(payload.keywords || watchKeywords);
+    watchNotice = "兴趣已保存";
+  } catch {
+    watchError = "兴趣保存失败";
+  } finally {
+    render();
+  }
+}
+
+async function runWatches() {
+  if (watchRunning) {
+    return;
+  }
+  watchRunning = true;
+  watchError = "";
+  watchNotice = "";
+  render();
+  try {
+    const response = await fetch("/api/watches/run", { method: "POST" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(typeof payload?.detail === "string" ? payload.detail : "筛选失败");
+    }
+    watchNotice = String(payload.message || "筛选完成");
+    await loadWatches();
+  } catch (cause) {
+    watchError = cause instanceof Error ? cause.message : "筛选失败";
+  } finally {
+    watchRunning = false;
+    render();
+  }
+}
+
+async function refresh() {
+  try {
+    const response = await fetch("/api/refresh", { method: "POST" });
+    if (!response.ok) throw new Error("refresh failed");
+  } catch {
+    requestError = "刷新失败，请稍后重试";
+    updateResults();
   }
 }
 
 function render() {
   const lastPage = Math.max(1, Math.ceil(pageData.total / pageData.page_size) || 1);
+  const classLastPage = Math.max(1, Math.ceil(classPage.total / classPage.page_size) || 1);
+  const watchLastPage = Math.max(1, Math.ceil(watchPage.total / watchPage.page_size) || 1);
+  const page = currentPage();
+  let action = "";
+  if (page === "watch") {
+    action = `<button class="refresh" type="button" data-watch-run ${watchRunning ? "disabled" : ""}>${watchRunning ? "筛选中" : "筛选"}</button>`;
+  } else if (page !== "topics") {
+    action = `<button class="refresh" type="button">刷新</button>`;
+  }
+  let body = titlesBody(lastPage);
+  if (page === "topics") {
+    body = topicsBody(
+      classCatalog,
+      classPage,
+      classQuery,
+      activeTopicId(),
+      meta.sites,
+      classLastPage,
+      classLoading,
+      classError,
+      formatTime,
+      escapeHtml,
+      escapeAttr,
+    );
+  } else if (page === "watch") {
+    body = watchBody(
+      watchPage,
+      watchQuery,
+      watchKeywords,
+      meta.sites,
+      watchLastPage,
+      watchLoading,
+      watchRunning,
+      watchError,
+      watchNotice,
+      formatTime,
+      escapeHtml,
+      escapeAttr,
+    );
+  }
   root.innerHTML = `
+    <a class="skip" href="#main">跳到内容</a>
+    <header class="app-bar">
+      <div class="app-bar-inner">
+        <a class="brand" href="/" data-nav>WatchSieve</a>
+        <nav class="menu" aria-label="主导航">
+          ${NAV_ITEMS.map((item) => {
+            const current = item.id === page;
+            return `<a href="${escapeAttr(item.href)}" data-nav ${current ? 'aria-current="page"' : ""}>${escapeHtml(item.label)}</a>`;
+          }).join("")}
+        </nav>
+        ${action}
+      </div>
+    </header>
+    ${body}
+  `;
+  bindShell();
+  if (page === "topics") {
+    bindTopics();
+  } else if (page === "watch") {
+    bindWatch();
+  } else {
+    bindTitles();
+  }
+}
+
+function titlesBody(lastPage: number) {
+  return `
     <div class="page">
-      <header class="top">
-        <div>
-          <h1>WatchSieve</h1>
-          <p class="when">${whenLabel()}</p>
-        </div>
-        <button class="refresh" type="button" ${refreshing ? "disabled" : ""}>
-          ${refreshing ? "抓取中" : "刷新"}
-        </button>
-      </header>
+      <div class="page-head">
+        <h1>标题</h1>
+        <p class="when">${whenLabel()}</p>
+      </div>
       <form class="filters" id="filters">
         <label>关键词
           <input name="q" type="search" value="${escapeAttr(query.q)}" placeholder="搜标题" />
@@ -93,12 +324,46 @@ function render() {
           <button class="ghost" type="button" data-reset>重置</button>
         </div>
       </form>
-      ${pageData.failed_sites.length ? `<p class="fail">${escapeHtml(pageData.failed_sites.join("、"))} 抓取失败</p>` : ""}
-      <main class="board" aria-busy="${refreshing ? "true" : "false"}">
+      <p class="fail" role="status" ${failureLabel() ? "" : "hidden"}>${escapeHtml(failureLabel())}</p>
+      <main id="main" class="board" tabindex="-1">
         ${tableBody(lastPage)}
       </main>
     </div>
   `;
+}
+
+function bindShell() {
+  root.querySelectorAll<HTMLAnchorElement>("[data-nav]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      const next = new URL(link.href);
+      const nextUrl = `${next.pathname}${next.hash}`;
+      const here = `${window.location.pathname}${window.location.hash}`;
+      if (nextUrl === here) {
+        return;
+      }
+      history.pushState(null, "", nextUrl);
+      if (next.pathname === "/topics") {
+        classQuery = readClassQuery();
+      }
+      if (next.pathname === "/watch") {
+        watchQuery = readWatchQuery();
+      }
+      render();
+      if (currentPage() === "topics") {
+        void loadClassifications();
+      }
+      if (currentPage() === "watch") {
+        void loadWatches();
+      }
+    });
+  });
+}
+
+function bindTitles() {
   root.querySelector(".refresh")?.addEventListener("click", () => {
     void refresh();
   });
@@ -121,6 +386,79 @@ function render() {
     writeQuery(query);
     void search();
   });
+  bindPagination();
+}
+
+function bindTopics() {
+  root.querySelector("#class-filters")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    const data = new FormData(form);
+    classQuery = {
+      q: String(data.get("q") || "").trim(),
+      site_id: String(data.get("site_id") || ""),
+      page: 1,
+    };
+    writeClassQuery(classQuery);
+    void loadClassifications();
+  });
+  root.querySelector("[data-class-reset]")?.addEventListener("click", () => {
+    classQuery = { q: "", site_id: "", page: 1 };
+    writeClassQuery(classQuery);
+    void loadClassifications();
+  });
+  root.querySelector("[data-class-prev]")?.addEventListener("click", () => {
+    classQuery = { ...classQuery, page: Math.max(1, classQuery.page - 1) };
+    writeClassQuery(classQuery);
+    void loadClassifications();
+  });
+  root.querySelector("[data-class-next]")?.addEventListener("click", () => {
+    classQuery = { ...classQuery, page: classQuery.page + 1 };
+    writeClassQuery(classQuery);
+    void loadClassifications();
+  });
+}
+
+function bindWatch() {
+  root.querySelector("[data-watch-run]")?.addEventListener("click", () => {
+    void runWatches();
+  });
+  root.querySelector("[data-watch-interests]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    watchKeywords = String(new FormData(form).get("keywords") || "");
+    void saveWatchKeywords();
+  });
+  root.querySelector("#watch-filters")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    const data = new FormData(form);
+    watchQuery = {
+      q: String(data.get("q") || "").trim(),
+      site_id: String(data.get("site_id") || ""),
+      page: 1,
+    };
+    writeWatchQuery(watchQuery);
+    void loadWatches();
+  });
+  root.querySelector("[data-watch-reset]")?.addEventListener("click", () => {
+    watchQuery = { q: "", site_id: "", page: 1 };
+    writeWatchQuery(watchQuery);
+    void loadWatches();
+  });
+  root.querySelector("[data-watch-prev]")?.addEventListener("click", () => {
+    watchQuery = { ...watchQuery, page: Math.max(1, watchQuery.page - 1) };
+    writeWatchQuery(watchQuery);
+    void loadWatches();
+  });
+  root.querySelector("[data-watch-next]")?.addEventListener("click", () => {
+    watchQuery = { ...watchQuery, page: watchQuery.page + 1 };
+    writeWatchQuery(watchQuery);
+    void loadWatches();
+  });
+}
+
+function bindPagination() {
   root.querySelector("[data-prev]")?.addEventListener("click", () => {
     query = { ...query, page: Math.max(1, query.page - 1) };
     writeQuery(query);
@@ -134,14 +472,48 @@ function render() {
 }
 
 async function search() {
-  pageData = await loadTopics(query);
+  try {
+    const snapshot = JSON.stringify(query);
+    const next = await loadTopics(query);
+    if (snapshot !== JSON.stringify(query)) return;
+    pageData = next;
+    requestError = "";
+  } catch {
+    requestError = "查询失败，请稍后重试";
+  }
   render();
 }
 
-function tableBody(lastPage: number) {
-  if (refreshing) {
-    return `<div class="skeletons" aria-hidden="true">${"<span></span>".repeat(8)}</div>`;
+function failureLabel() {
+  return requestError || (pageData.failed_sites.length
+    ? `${pageData.failed_sites.join("、")} 抓取失败；如有历史标题则保留，时间为原抓取时间`
+    : "");
+}
+
+function updateResults() {
+  if (currentPage() !== "titles") {
+    return;
   }
+  // Polling must not replace the filter form or interrupt Chinese IME input.
+  const label = root.querySelector(".when");
+  if (label) label.textContent = whenLabel();
+  const failure = root.querySelector<HTMLParagraphElement>(".fail");
+  if (failure) {
+    failure.hidden = !failureLabel();
+    failure.textContent = failureLabel();
+  }
+  const board = root.querySelector(".board");
+  if (board) {
+    const lastPage = Math.max(1, Math.ceil(pageData.total / pageData.page_size) || 1);
+    const body = tableBody(lastPage);
+    if (board.innerHTML !== body && !board.contains(document.activeElement)) {
+      board.innerHTML = body;
+      bindPagination();
+    }
+  }
+}
+
+function tableBody(lastPage: number) {
   if (!pageData.items.length) {
     return `<p class="empty">${pageData.fetched_at ? "没有符合条件的标题" : "还没有标题，点刷新"}</p>`;
   }
@@ -193,9 +565,6 @@ function option(id: string, name: string, selected: string) {
 }
 
 function whenLabel() {
-  if (refreshing) {
-    return "正在抓取标题";
-  }
   if (!pageData.fetched_at) {
     return "还没有抓过";
   }
@@ -223,6 +592,9 @@ function formatTime(value: string | null) {
 }
 
 function readQuery(): QueryState {
+  if (window.location.pathname && window.location.pathname !== "/") {
+    return { q: "", site_id: "", category: "", date: "", page: 1 };
+  }
   const params = new URLSearchParams(window.location.search);
   return {
     q: params.get("q") || "",
@@ -233,6 +605,49 @@ function readQuery(): QueryState {
   };
 }
 
+function readClassQuery(): ClassQueryState {
+  if (window.location.pathname !== "/topics") {
+    return { q: "", site_id: "", page: 1 };
+  }
+  const params = new URLSearchParams(window.location.search);
+  return {
+    q: params.get("q") || "",
+    site_id: params.get("site_id") || "",
+    page: Math.max(1, Number(params.get("page") || 1) || 1),
+  };
+}
+
+function writeClassQuery(next: ClassQueryState) {
+  const params = new URLSearchParams();
+  if (next.q) params.set("q", next.q);
+  if (next.site_id) params.set("site_id", next.site_id);
+  if (next.page > 1) params.set("page", String(next.page));
+  const qs = params.toString();
+  const hash = activeTopicId();
+  history.replaceState(null, "", `/topics${qs ? `?${qs}` : ""}#${hash}`);
+}
+
+function readWatchQuery(): WatchQueryState {
+  if (window.location.pathname !== "/watch") {
+    return { q: "", site_id: "", page: 1 };
+  }
+  const params = new URLSearchParams(window.location.search);
+  return {
+    q: params.get("q") || "",
+    site_id: params.get("site_id") || "",
+    page: Math.max(1, Number(params.get("page") || 1) || 1),
+  };
+}
+
+function writeWatchQuery(next: WatchQueryState) {
+  const params = new URLSearchParams();
+  if (next.q) params.set("q", next.q);
+  if (next.site_id) params.set("site_id", next.site_id);
+  if (next.page > 1) params.set("page", String(next.page));
+  const qs = params.toString();
+  history.replaceState(null, "", `/watch${qs ? `?${qs}` : ""}`);
+}
+
 function writeQuery(next: QueryState) {
   const params = new URLSearchParams();
   if (next.q) params.set("q", next.q);
@@ -241,7 +656,7 @@ function writeQuery(next: QueryState) {
   if (next.date) params.set("date", next.date);
   if (next.page > 1) params.set("page", String(next.page));
   const qs = params.toString();
-  history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  history.replaceState(null, "", qs ? `/?${qs}` : "/");
 }
 
 function emptyPage(): TopicPage {

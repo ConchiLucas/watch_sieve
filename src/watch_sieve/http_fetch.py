@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
 
+from watch_sieve.cancellation import check_cancelled
 from watch_sieve.headers import decode_html, request_headers
 from watch_sieve.models import FetchAttempt
 
@@ -24,12 +26,14 @@ def fetch_http(
     timeout_seconds: int = 30,
     retries: int = 3,
     retry_interval: float = 0.8,
+    should_stop: Callable[[], bool] | None = None,
 ) -> HttpFetch:
     last_error = "http fetch failed"
     attempts: list[FetchAttempt] = []
     timeout = httpx.Timeout(timeout_seconds, connect=min(10.0, timeout_seconds))
 
     for index in range(retries):
+        check_cancelled(should_stop)
         try:
             response = client.get(
                 url,
@@ -37,6 +41,7 @@ def fetch_http(
                 timeout=timeout,
                 follow_redirects=True,
             )
+            check_cancelled(should_stop)
             html = decode_html(response.content, response.encoding)
             attempt = FetchAttempt(
                 engine="http",

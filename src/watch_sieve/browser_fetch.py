@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -11,6 +12,7 @@ if _local_browsers.exists():
 
 from playwright.sync_api import Browser, Playwright, TimeoutError as PlaywrightTimeout, sync_playwright
 
+from watch_sieve.cancellation import RefreshCancelled, check_cancelled
 from watch_sieve.headers import BROWSER_HEADERS
 from watch_sieve.models import FetchAttempt
 
@@ -56,7 +58,9 @@ class BrowserSession:
         *,
         wait_for: str | None = None,
         timeout_seconds: int = 30,
+        should_stop: Callable[[], bool] | None = None,
     ) -> BrowserFetch:
+        check_cancelled(should_stop)
         self.start()
         assert self._browser is not None
         timeout_ms = timeout_seconds * 1000
@@ -74,9 +78,12 @@ class BrowserSession:
         status_code: int | None = None
         try:
             response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            check_cancelled(should_stop)
             status_code = response.status if response is not None else None
             page.wait_for_selector("body", timeout=min(_remaining_ms(started, timeout_ms), 10_000))
+            check_cancelled(should_stop)
             _wait_out_challenge(page, _remaining_ms(started, timeout_ms))
+            check_cancelled(should_stop)
             if wait_for:
                 try:
                     page.wait_for_selector(
@@ -86,6 +93,7 @@ class BrowserSession:
                     )
                 except PlaywrightTimeout:
                     page.wait_for_timeout(2000)
+            check_cancelled(should_stop)
             html = page.content()
             title = page.title()
             final_url = page.url
@@ -96,6 +104,8 @@ class BrowserSession:
                 title=title,
                 attempt=FetchAttempt(engine="browser", status_code=status_code, final_url=final_url),
             )
+        except RefreshCancelled:
+            raise
         except PlaywrightTimeout as exc:
             raise BrowserFetchError(f"browser timeout: {exc}", FetchAttempt(engine="browser", error=str(exc))) from exc
         except Exception as exc:
