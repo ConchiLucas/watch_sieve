@@ -1,0 +1,62 @@
+name: watch-sieve
+x-common: &common
+  image: local/watch-sieve:latest
+  build: .
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 45s
+  shm_size: 1gb
+  env_file: .env
+  volumes:
+    - ./data:/app/data
+    - ./configs:/app/configs:ro
+  networks:
+    - shared
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-environment: &environment
+  WATCH_SIEVE_DATABASE_HOST: postgres16
+  WATCH_SIEVE_GATEWAY_BASE_URL: http://local-config-center:18527
+  SNAIL_SERVER_HOST: snail-job-server
+  SNAIL_SERVER_PORT: "17888"
+  SNAIL_HOST_IP: watch-sieve-worker
+  SNAIL_HOST_PORT: "17889"
+  PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+  TZ: Asia/Shanghai
+
+services:
+  web:
+    <<: *common
+    container_name: watch-sieve-web
+    environment:
+      <<: *environment
+      WATCH_SIEVE_WEB_HOST: 0.0.0.0
+    command: [web]
+    ports:
+      - "127.0.0.1:47863:8000"
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
+      interval: 20s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+  worker:
+    <<: *common
+    container_name: watch-sieve-worker
+    environment: *environment
+    command: [worker]
+    healthcheck:
+      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 17889), timeout=4).close()"]
+      interval: 20s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+networks:
+  shared:
+    external: true
+    name: vibedeploy-shared

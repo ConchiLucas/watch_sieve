@@ -1,5 +1,38 @@
 # WatchSieve
 
+## 本机 Docker 部署（默认）
+
+Web 与 SnailJob 执行器由本仓库 `docker-compose.yml` 分别管理，共用镜像和原有 `data/`。
+统一入口 `/Users/conchi/docker-compose/watch-sieve/docker-compose.yml` 引用本仓库配置。
+
+```bash
+./scripts/start.sh build   # 首次部署或代码更新后构建（包含前端和 Linux Chromium）
+./scripts/start.sh start
+./scripts/start.sh status
+./scripts/start.sh logs
+./scripts/start.sh stop
+```
+
+页面：http://127.0.0.1:47863 。本机与 Mac mini 使用相同的宿主机端口 47863；容器内部仍监听 8000，宿主机仅开放回环端口。
+两个容器使用 `restart: unless-stopped`，Docker Desktop 启动后恢复；主动 stop 后保持停止，需执行 start 恢复。
+不会在每次登录时构建镜像，也不依赖 Context Router 运行。Docker Desktop 仍须由 macOS 登录项启动。
+
+依赖既有的 `vibedeploy-shared` 网络及其中的 `postgres16:5432`、`snail-job-server:17888`、
+`local-config-center:18527`。不创建或迁移这些依赖，也不修改 SnailJob 的任务计划。
+`.env` 提供现有账号和 Token，不打入镜像；Compose 覆盖容器中的连接地址。
+数据库 URL 只替换主机，保留原用户、密码、库名和查询参数。
+执行器注册地址为 `watch-sieve-worker:17889`，服务端通过共享网络回调，无需发布此端口到宿主机。
+
+Web/worker 启动时等待 PostgreSQL，worker 还等待 SnailJob TCP 端口；120 秒超时后退出，由重启策略重试。
+模型网关暂时不可用不阻止 Web 启动，调用模型时按现有逻辑报错。
+Web `/api/health` 检查数据库查询；worker 容器健康检查只代表回调端口存活，
+完整验收还需确认 SnailJob 服务端登记节点、心跳和任务结果。
+
+现有 `data/` 原地绑定到两个容器，保留缓存和跨进程锁；`configs/` 只读挂载。
+日志由 Docker 管理（每服务最多 3 × 10 MB）；旧 `log/` 保留作历史记录。
+不要同时运行下面的宿主机 Web/执行器命令，以免重复注册或争用端口。
+
+
 监控指定网站并稳定抓取正文。当前 MVP 只做一件事：把页面内容拿到手。
 
 抓取路径参考了 Crawl4AI、DrissionPage、Firecrawl：

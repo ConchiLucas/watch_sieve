@@ -1,21 +1,21 @@
 ## Start
 
-Web (filters, title table, pagination) and the SnailJob executor are two processes in this repo. Start both with:
+Web (filters, title table, pagination) and the SnailJob executor run as two Docker Compose services. Build after code changes, then start both with:
 
 ```bash
-./scripts/start.sh
+./scripts/start.sh build
+./scripts/start.sh start
 ```
 
-If web or the executor is already running (pid file, port 8000 / 17889, or matching command), the script leaves it alone and only starts the missing process.
-
-Stop or check:
+Stop, check, or inspect logs with:
 
 ```bash
 ./scripts/start.sh stop
 ./scripts/start.sh status
+./scripts/start.sh logs
 ```
 
-Open the admin page at http://127.0.0.1:8000 (needs `web/dist`; run `npm --prefix web run build` if the page is missing). Logs are `log/web.log` and `log/snailjob.log`.
+Open the web page at http://127.0.0.1:47863. The build includes `web/dist`; Docker manages service logs. Do not run the old host Web or executor alongside Compose.
 
 Do not start SnailJob server with this script. That is Docker compose at `/Users/conchi/docker-compose/snail-job`. Admin: http://127.0.0.1:18080/snail-job. Vite on 5173 is optional frontend hot reload, not required for this start path.
 

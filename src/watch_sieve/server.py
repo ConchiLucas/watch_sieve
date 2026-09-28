@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -37,6 +38,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    try:
+        get_store().query_topics(page=1, page_size=1)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return {"status": "ok"}
 
 
 @app.get("/api/titles", response_model=TitlesResponse)
@@ -111,4 +121,4 @@ def run() -> None:
 
     load_dotenv(ROOT / ".env")
     get_store()
-    uvicorn.run("watch_sieve.server:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("watch_sieve.server:app", host=os.getenv("WATCH_SIEVE_WEB_HOST", "127.0.0.1"), port=8000, reload=False)
