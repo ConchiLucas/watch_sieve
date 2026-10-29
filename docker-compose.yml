@@ -19,7 +19,7 @@ x-common: &common
       max-file: "3"
 
 x-environment: &environment
-  WATCH_SIEVE_DATABASE_HOST: postgres16
+  WATCH_SIEVE_DATABASE_HOST: ${WATCH_SIEVE_DATABASE_HOST:-}
   WATCH_SIEVE_GATEWAY_BASE_URL: http://local-config-center:18527
   SNAIL_SERVER_HOST: snail-job-server
   SNAIL_SERVER_PORT: "17888"
