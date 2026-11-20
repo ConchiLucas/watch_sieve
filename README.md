@@ -14,7 +14,7 @@ Web 与 SnailJob 执行器由本仓库 `docker-compose.yml` 分别管理，共�
 ```
 
 页面：http://127.0.0.1:47863 。本机与 Mac mini 使用相同的宿主机端口 47863；容器内部仍监听 8000，宿主机仅开放回环端口。
-两个容器使用 `restart: unless-stopped`，Docker Desktop 启动后恢复；主动 stop 后保持停止，需执行 start 恢复。
+两个容器使用 `restart: "no"`，Docker Desktop 或电脑重启后不会自动恢复，需执行 `./scripts/start.sh start` 手动启动。
 不会在每次登录时构建镜像，也不依赖 Context Router 运行。Docker Desktop 仍须由 macOS 登录项启动。
 
 依赖既有的 `vibedeploy-shared` 网络及其中的 `postgres16:5432`、`snail-job-server:17888`、
